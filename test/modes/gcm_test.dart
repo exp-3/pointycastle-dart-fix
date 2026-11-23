@@ -2,6 +2,7 @@
 @TestOn('vm')
 library test.modes.gcm_test;
 
+import 'dart:mirrors';
 import 'dart:typed_data';
 
 import 'package:pointycastle/block/aes.dart';
@@ -14,6 +15,62 @@ import '../test/src/helpers.dart';
 
 void main() {
   group('counter regression', () {
+    final gcmLibrary = reflectClass(GCMBlockCipher).owner as LibraryMirror;
+    final blocksRemaining =
+        MirrorSystem.getSymbol('_blocksRemaining', gcmLibrary);
+    final processedBytes = MirrorSystem.getSymbol('_processedBytes', gcmLibrary);
+
+    for (final forEncryption in [true, false]) {
+      final mode = forEncryption ? 'encryption' : 'decryption';
+
+      test('$mode initializes and restores the block limit', () {
+        final params = AEADParameters(
+            KeyParameter(Uint8List(16)), 128, Uint8List(12), Uint8List(0));
+        final cipher = GCMBlockCipher(AESEngine())..init(forEncryption, params);
+        final state = reflect(cipher);
+        final block = Uint8List(16);
+        final output = Uint8List(16);
+
+        expect(state.getField(blocksRemaining).reflectee, 4294967294);
+        cipher.processBlock(block, 0, output, 0);
+        expect(state.getField(blocksRemaining).reflectee, 4294967293);
+
+        cipher.reset();
+        expect(state.getField(blocksRemaining).reflectee, 4294967294);
+        expect(state.getField(processedBytes).reflectee, 0);
+        cipher.processBlock(block, 0, output, 0);
+        expect(state.getField(blocksRemaining).reflectee, 4294967293);
+
+        cipher.init(forEncryption, params);
+        expect(state.getField(blocksRemaining).reflectee, 4294967294);
+        expect(state.getField(processedBytes).reflectee, 0);
+      });
+
+      test('$mode rejects blocks after the last allowed block', () {
+        final params = AEADParameters(
+            KeyParameter(Uint8List(16)), 128, Uint8List(12), Uint8List(0));
+        final cipher = GCMBlockCipher(AESEngine())..init(forEncryption, params);
+        final state = reflect(cipher);
+        final block = Uint8List(16);
+        final output = Uint8List(16);
+
+        // Exercise the exhaustion boundary without processing 64 GiB.
+        state.setField(blocksRemaining, 1);
+        expect(cipher.processBlock(block, 0, output, 0), 16);
+        expect(state.getField(blocksRemaining).reflectee, 0);
+        expect(state.getField(processedBytes).reflectee, 16);
+
+        output.fillRange(0, output.length, 0xa5);
+        expect(
+            () => cipher.processBlock(block, 0, output, 0),
+            throwsA(isA<StateError>().having((error) => error.message, 'message',
+                'Attempt to process too many blocks')));
+        expect(state.getField(blocksRemaining).reflectee, 0);
+        expect(state.getField(processedBytes).reflectee, 16);
+        expect(output, everyElement(0xa5));
+      });
+    }
+
     test('4096 byte message', () {
       final aesKey = createUint8ListFromHexString(
           'fecfc5c627a1bcd0e83c495023351e653b58b964d79a75791f691d9620903343');

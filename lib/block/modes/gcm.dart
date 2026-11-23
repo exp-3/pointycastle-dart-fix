@@ -10,6 +10,10 @@ import '../../src/impl/base_aead_block_cipher.dart';
 import '../../src/registry/registry.dart';
 
 class GCMBlockCipher extends BaseAEADBlockCipher {
+  // NIST SP 800-38D, section 5.2.1.1: at most 2^39 - 256 bits of plaintext,
+  // or 2^32 - 2 blocks. Use a literal to avoid 32-bit shifts on the web.
+  static const int _maxBlocks = 0xfffffffe;
+
   /// Intended for internal use.
   // ignore: non_constant_identifier_names
   static final FactoryConfig factoryConfig = DynamicFactoryConfig.suffix(
@@ -35,15 +39,13 @@ class GCMBlockCipher extends BaseAEADBlockCipher {
 
   @override
   void init(bool forEncryption, CipherParameters? params) {
-    var bs = underlyingCipher.blockSize;
-    _blocksRemaining = (2 ^ 36 - 64) ~/ bs;
+    _blocksRemaining = _maxBlocks;
     super.init(forEncryption, params);
   }
 
   @override
   void reset() {
-    var bs = underlyingCipher.blockSize;
-    _blocksRemaining = (2 ^ 36 - 64) ~/ bs;
+    _blocksRemaining = _maxBlocks;
     super.reset();
   }
 
@@ -94,9 +96,8 @@ class GCMBlockCipher extends BaseAEADBlockCipher {
     var i = Uint8List(blockSize);
     i.setAll(0, inp.skip(inpOff).take(length));
 
-    _processedBytes += length;
-
     _getNextCTRBlock(_e);
+    _processedBytes += length;
 
     var o = Uint8List.fromList(i);
     _xor(o, _e);
@@ -126,10 +127,6 @@ class GCMBlockCipher extends BaseAEADBlockCipher {
   }
 
   void _getNextCTRBlock(Uint8List out) {
-    //
-    // This is tested manually by forcing _blocksRemaining to 1 and trying to run
-    // the unit tests. Otherwise it takes 64GB of data to exhaust.
-    //
     if (_blocksRemaining == 0) {
       throw StateError('Attempt to process too many blocks');
     }
