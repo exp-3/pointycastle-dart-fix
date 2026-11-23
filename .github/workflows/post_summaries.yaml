@@ -11,6 +11,128 @@ on:
 
 jobs:
   upload:
-    uses: dart-lang/ecosystem/.github/workflows/post_summaries.yaml@main
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
     permissions:
+      actions: read
       pull-requests: write
+    steps:
+      - name: Find Health output
+        id: output
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              ...context.repo,
+              run_id: context.payload.workflow_run.id,
+              per_page: 100,
+            });
+            const available = artifacts.some(artifact => artifact.name === 'output' && !artifact.expired);
+            core.setOutput('available', String(available));
+            if (!available) {
+              core.info('Health did not produce a comment artifact.');
+            }
+
+      - name: Download Health output
+        if: steps.output.outputs.available == 'true'
+        uses: actions/download-artifact@c850b930e6ba138125429b7e5c93fc707a7f8427
+        with:
+          name: output
+          path: ${{ runner.temp }}/health-summary
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Comment on PR
+        if: steps.output.outputs.available == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const directory = path.join(process.env.RUNNER_TEMP, 'health-summary');
+            const read = name => {
+              const file = path.join(directory, name);
+              return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined;
+            };
+            const issueNumber = Number(read('issueNumber')?.trim());
+            if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) {
+              throw new Error('Health output contains no valid PR number.');
+            }
+
+            const run = context.payload.workflow_run;
+            let pullRequests = run.pull_requests ?? [];
+            if (!pullRequests.some(pr => pr.number === issueNumber)) {
+              pullRequests = await github.paginate(github.rest.repos.listPullRequestsAssociatedWithCommit, {
+                ...context.repo,
+                commit_sha: run.head_sha,
+                per_page: 100,
+              });
+            }
+            if (!pullRequests.some(pr => pr.number === issueNumber)) {
+              throw new Error('Health output refers to a PR unrelated to this workflow run.');
+            }
+            const { data: pullRequest } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: issueNumber,
+            });
+            if (pullRequest.base.repo.full_name !== `${context.repo.owner}/${context.repo.repo}` ||
+                pullRequest.base.ref !== 'main') {
+              throw new Error('Health output refers to a PR outside this repository main branch.');
+            }
+
+            const header = '## PR Health';
+            const isSummary = body => typeof body === 'string' &&
+              body.split(/\r?\n/)[0].trimEnd() === header;
+            const markdown = read('comment.md');
+            if (markdown !== undefined && !isSummary(markdown)) {
+              throw new Error('Health output contains an unexpected comment header.');
+            }
+            const storedId = read('commentId');
+            let commentId;
+            if (storedId !== undefined) {
+              commentId = Number(storedId.trim());
+              if (!Number.isSafeInteger(commentId) || commentId <= 0) {
+                throw new Error('Health output contains an invalid comment ID.');
+              }
+              const { data: comment } = await github.rest.issues.getComment({
+                ...context.repo,
+                comment_id: commentId,
+              });
+              if (comment.issue_url.split('/').pop() !== String(issueNumber) ||
+                  comment.user?.login !== 'github-actions[bot]' ||
+                  !isSummary(comment.body)) {
+                throw new Error('Health output refers to a comment outside this PR Health summary.');
+              }
+            } else if (markdown !== undefined) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                ...context.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+              });
+              commentId = comments.find(comment =>
+                comment.user?.login === 'github-actions[bot]' &&
+                isSummary(comment.body)
+              )?.id;
+            }
+
+            if (markdown !== undefined) {
+              if (commentId !== undefined) {
+                await github.rest.issues.updateComment({
+                  ...context.repo,
+                  comment_id: commentId,
+                  body: markdown,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  ...context.repo,
+                  issue_number: issueNumber,
+                  body: markdown,
+                });
+              }
+            } else if (commentId !== undefined) {
+              await github.rest.issues.deleteComment({
+                ...context.repo,
+                comment_id: commentId,
+              });
+            }
