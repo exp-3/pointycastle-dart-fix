@@ -34,6 +34,13 @@ class GCMBlockCipher extends BaseAEADBlockCipher {
 
   GCMBlockCipher(super.cipher);
 
+  static void _writeBitLength(ByteData output, int offset, int byteLength) {
+    // Split before multiplying by 8 to avoid overflow and JavaScript's
+    // 32-bit shifts. ByteData.setUint64 is unavailable on dart2js.
+    output.setUint32(offset, byteLength ~/ 0x20000000, Endian.big);
+    output.setUint32(offset + 4, (byteLength % 0x20000000) * 8, Endian.big);
+  }
+
   @override
   String get algorithmName => '${underlyingCipher.algorithmName}/GCM';
 
@@ -80,10 +87,10 @@ class GCMBlockCipher extends BaseAEADBlockCipher {
       counter[15] = 1;
     } else {
       _gHASH(counter, iv);
-      var length = Uint8List.view((Uint32List(4)..[0] = iv.length * 8).buffer);
-      length = Uint8List.fromList(length.reversed.toList());
+      var length = ByteData(16);
+      _writeBitLength(length, 8, iv.length);
 
-      _gHASHBlock(counter, length);
+      _gHASHBlock(counter, length.buffer.asUint8List());
     }
     return counter;
   }
@@ -187,13 +194,11 @@ class GCMBlockCipher extends BaseAEADBlockCipher {
         ? processBlock(remainingInput, 0, out, outOff)
         : 0;
 
-    var len = Uint8List.view((Uint32List(4)
-          ..[2] = aad!.length * 8
-          ..[0] = _processedBytes * 8)
-        .buffer);
-    len = Uint8List.fromList(len.reversed.toList());
+    var len = ByteData(16);
+    _writeBitLength(len, 0, aad!.length);
+    _writeBitLength(len, 8, _processedBytes);
 
-    _gHASHBlock(_x, len);
+    _gHASHBlock(_x, len.buffer.asUint8List());
 
     _xor(_x, _e0);
 

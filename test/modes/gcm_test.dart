@@ -14,6 +14,76 @@ import 'package:test/test.dart';
 import '../test/src/helpers.dart';
 
 void main() {
+  group('length encoding regression', () {
+    final gcmClass = reflectClass(GCMBlockCipher);
+    final gcmLibrary = gcmClass.owner as LibraryMirror;
+    Symbol privateSymbol(String name) =>
+        MirrorSystem.getSymbol(name, gcmLibrary);
+
+    test('encodes full bit lengths in big endian without large buffers', () {
+      final cases = <int, String>{
+        0: '0000000000000000',
+        1: '0000000000000008',
+        0x1fffffff: '00000000fffffff8',
+        0x20000000: '0000000100000000',
+        0x20000001: '0000000100000008',
+        0xfffffffe0: '0000007fffffff00',
+        0x1fffffffffffff: '00fffffffffffff8',
+        0x1fffffffffffffff: 'fffffffffffffff8',
+      };
+
+      for (final entry in cases.entries) {
+        for (final offset in [0, 8]) {
+          final output = ByteData(16);
+          output.buffer.asUint8List().fillRange(0, 16, 0xa5);
+          gcmClass.invoke(privateSymbol('_writeBitLength'),
+              [output, offset, entry.key]);
+          final expected = createUint8ListFromHexString(entry.value);
+          expect(output.buffer.asUint8List(offset, 8), orderedEquals(expected),
+              reason: '${entry.key} bytes at offset $offset');
+          expect(output.buffer.asUint8List(8 - offset, 8), everyElement(0xa5));
+        }
+      }
+    });
+
+    test('final length block keeps AAD and message bit lengths separate', () {
+      final cipher = GCMBlockCipher(AESEngine())
+        ..init(
+            true,
+            AEADParameters(KeyParameter(Uint8List(16)), 128, Uint8List(12),
+                Uint8List.fromList([1, 2, 3])));
+      final state = reflect(cipher);
+
+      // Multiplication by the GHASH identity leaves the length block visible.
+      state.setField(privateSymbol('_h'), Uint8List(16)..[0] = 0x80);
+      state.setField(privateSymbol('_x'), Uint8List(16));
+      state.setField(privateSymbol('_e0'), Uint8List(16));
+      state.setField(privateSymbol('_processedBytes'), 0x20000001);
+
+      final output = Uint8List(16);
+      expect(cipher.doFinal(output, 0), 16);
+      expect(
+          formatBytesAsHexString(output), '00000000000000180000000100000008');
+    });
+
+    test('non-96-bit IV appends its length in the low 64-bit field', () {
+      final cipher = GCMBlockCipher(AESEngine())
+        ..init(
+            true,
+            AEADParameters(
+                KeyParameter(Uint8List(16)), 128, Uint8List(12), Uint8List(0)));
+      final state = reflect(cipher);
+      state.setField(privateSymbol('_h'), Uint8List(16)..[0] = 0x80);
+
+      final iv = Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8]);
+      final counter = state
+          .invoke(privateSymbol('_computeInitialCounter'), [iv]).reflectee
+          as Uint8List;
+      expect(
+          formatBytesAsHexString(counter), '01020304050607080000000000000040');
+    });
+  });
+
   group('counter regression', () {
     final gcmLibrary = reflectClass(GCMBlockCipher).owner as LibraryMirror;
     final blocksRemaining =
