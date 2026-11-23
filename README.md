@@ -2,7 +2,9 @@
 Pointy Castle
 =============
 
-![Dart VM](https://github.com/bcgit/pc-dart/workflows/ci-vm/badge.svg) ![Chrome](https://github.com//bcgit/pc-dart/workflows/ci-chrome/badge.svg) ![Node JS](https://github.com/bcgit/pc-dart/workflows/ci-node/badge.svg)
+![Dart VM](https://github.com/exp-3/pointycastle-dart-fix/workflows/ci-vm/badge.svg)
+![Chrome](https://github.com/exp-3/pointycastle-dart-fix/workflows/ci-chrome/badge.svg)
+![Node JS](https://github.com/exp-3/pointycastle-dart-fix/workflows/ci-node/badge.svg)
 
 **NOTE: We're sorry, but while we agreed to host this, the assumption was that it would be maintained by others and the maintainers of this library appear to have abandoned the project, at least we are no longer able to contact them. If you are interested in taking over maintenance of this project please let us know at feedback-crypto@bouncycastle.org**.
 
