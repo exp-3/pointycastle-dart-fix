@@ -1,5 +1,7 @@
 // See file LICENSE for more information.
 
+// Dart's secure random source is not available on every Node.js runtime.
+@TestOn('vm || browser')
 library test.random.dart_secure_random_test;
 
 import 'package:pointycastle/pointycastle.dart';
